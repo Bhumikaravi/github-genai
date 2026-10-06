@@ -3,4 +3,4 @@ fastapi
 uvicorn
 requests
 pydantic
-google-genai
+google-genai==1.47.0
