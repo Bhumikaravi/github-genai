@@ -1,46 +1,25 @@
 from __future__ import annotations
 
-import json
 import os
 from typing import Dict, Iterator, List
 
 import requests
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-OLLAMA_URL = os.getenv(
-    "OLLAMA_URL",
-    "http://127.0.0.1:11434"
-)
-
-OLLAMA_MODEL = os.getenv(
-    "OLLAMA_MODEL",
-    "qwen2.5:3b"
-)
-
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",
     "gemini-2.5-flash"
 )
 
-TIMEOUT = int(
-    os.getenv("OLLAMA_TIMEOUT", "180")
-)
 
+def get_gemini_key() -> str | None:
+    """
+    Gets Gemini API key from:
+    1. Environment variable
+    2. Streamlit Secrets
+    """
 
-# ============================================================
-# GEMINI API KEY
-# ============================================================
-
-def _gemini_key() -> str | None:
-
-    key = os.getenv(
-        "GEMINI_API_KEY",
-        ""
-    ).strip()
+    key = os.getenv("GEMINI_API_KEY", "").strip()
 
     if key:
         return key
@@ -48,13 +27,13 @@ def _gemini_key() -> str | None:
     try:
         import streamlit as st
 
-        value = st.secrets.get(
+        key = st.secrets.get(
             "GEMINI_API_KEY",
             ""
         )
 
-        if value:
-            return str(value).strip()
+        if key:
+            return str(key).strip()
 
     except Exception:
         pass
@@ -62,92 +41,35 @@ def _gemini_key() -> str | None:
     return None
 
 
-# ============================================================
-# CHECK AI PROVIDER
-# ============================================================
-
-def using_cloud_ai() -> bool:
-    return bool(_gemini_key())
-
-
 def check_model() -> tuple[bool, str]:
+    """
+    Checks whether Gemini API key is configured.
+    """
 
-    # Gemini on Streamlit Cloud
-    if using_cloud_ai():
+    key = get_gemini_key()
 
-        return (
-            True,
-            f"Cloud AI model '{GEMINI_MODEL}' is ready."
-        )
-
-    # Ollama locally
-    try:
-
-        response = requests.get(
-            f"{OLLAMA_URL}/api/tags",
-            timeout=5
-        )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        models = [
-            model.get("name", "")
-            for model in data.get(
-                "models",
-                []
-            )
-        ]
-
-        model_available = any(
-            model == OLLAMA_MODEL
-            or model.startswith(
-                OLLAMA_MODEL + ":"
-            )
-            for model in models
-        )
-
-        if not model_available:
-
-            return (
-                False,
-                f"Ollama is running, but model "
-                f"'{OLLAMA_MODEL}' is not installed."
-            )
-
-        return (
-            True,
-            f"Local model '{OLLAMA_MODEL}' is ready."
-        )
-
-    except requests.RequestException:
-
+    if not key:
         return (
             False,
-            f"Cannot connect to Ollama at "
-            f"{OLLAMA_URL}. Start Ollama and try again, "
-            "or configure GEMINI_API_KEY for Streamlit Cloud."
+            "Gemini API key is not configured."
         )
 
+    return (
+        True,
+        f"Gemini model '{GEMINI_MODEL}' is ready."
+    )
 
-# ============================================================
-# BUILD PROMPT
-# ============================================================
 
 def _build_prompt(
     file_tree: List[str],
-    code_files: Dict[str, str]
+    code_files: Dict[str, str],
 ) -> str:
 
-    tree = "\n".join(
-        file_tree[:200]
-    )
+    tree = "\n".join(file_tree[:200])
 
     code_parts = []
 
     for filename, code in code_files.items():
-
         code_parts.append(
             f"\n===== {filename} =====\n{code}"
         )
@@ -155,135 +77,85 @@ def _build_prompt(
     code = "".join(code_parts)
 
     return f"""
-You are a software engineer explaining a GitHub repository
-to a BCA student.
+You are a software engineer explaining a GitHub
+repository to a BCA student.
 
-Use ONLY the repository evidence supplied below.
+Analyze ONLY the repository information provided below.
 
-Do NOT invent:
+Do not invent:
 - features
 - technologies
 - files
-- functionality
 - APIs
 - databases
 - frameworks
+- functionality
 
-If something cannot be determined from the supplied code,
-say that it is not available in the provided files.
+If something cannot be determined from the provided
+repository files, clearly say that it cannot be determined.
 
-Write a clear and simple explanation using EXACTLY these
-sections:
+Explain the project in simple and clear English.
 
-1. Project Overview
-2. Main Features
-3. Main Technologies
-4. How It Works
-5. Important Files
-6. How to Run It
-7. Beginner-Friendly Summary
+Use EXACTLY these sections:
 
-Keep the explanation concise but useful.
+# 1. Project Overview
 
-FILE TREE:
+Explain what the project does.
+
+# 2. Main Features
+
+List the important features visible from the code.
+
+# 3. Main Technologies
+
+Mention programming languages, libraries,
+frameworks and tools actually found in the files.
+
+# 4. How It Works
+
+Explain the flow step by step.
+
+# 5. Important Files
+
+Mention important files and explain their purpose.
+
+# 6. How to Run It
+
+Explain how the project can be run based only
+on the available files.
+
+# 7. Beginner-Friendly Summary
+
+Give a simple explanation suitable for a BCA student.
+
+Keep the explanation concise and useful.
+
+================ FILE TREE ================
+
 {tree}
 
-SOURCE FILES:
+================ SOURCE FILES ================
+
 {code}
 """
 
 
-# ============================================================
-# OLLAMA
-# ============================================================
-
-def _stream_ollama(
-    prompt: str
-) -> Iterator[str]:
-
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": True,
-        "options": {
-            "temperature": 0.2,
-            "num_ctx": 8192
-        }
-    }
-
-    try:
-
-        response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
-            json=payload,
-            stream=True,
-            timeout=TIMEOUT
-        )
-
-        response.raise_for_status()
-
-    except requests.RequestException as exc:
-
-        raise RuntimeError(
-            f"Could not connect to Ollama: {exc}"
-        ) from exc
-
-    for line in response.iter_lines(
-        decode_unicode=True
-    ):
-
-        if not line:
-            continue
-
-        try:
-
-            data = json.loads(line)
-
-        except json.JSONDecodeError:
-
-            continue
-
-        if data.get("error"):
-
-            raise RuntimeError(
-                data["error"]
-            )
-
-        chunk = data.get(
-            "response",
-            ""
-        )
-
-        if chunk:
-            yield chunk
-
-        if data.get("done"):
-            break
-
-
-# ============================================================
-# GEMINI
-# ============================================================
-
-def _stream_gemini(
+def _generate_with_gemini(
     prompt: str,
-    api_key: str
+    api_key: str,
 ) -> Iterator[str]:
 
-    # Import the current Google GenAI SDK
     try:
-
         from google import genai
 
     except Exception as exc:
 
         raise RuntimeError(
-            "Google GenAI SDK could not be imported. "
+            "Gemini SDK could not be imported. "
             "Make sure google-genai is installed. "
             f"Import error: {exc}"
         ) from exc
 
-    # Create Gemini client
     try:
 
         client = genai.Client(
@@ -296,20 +168,21 @@ def _stream_gemini(
             f"Could not create Gemini client: {exc}"
         ) from exc
 
-    # Generate response
     try:
 
-        responses = client.models.generate_content_stream(
-            model=GEMINI_MODEL,
-            contents=prompt
+        response_stream = (
+            client.models.generate_content_stream(
+                model=GEMINI_MODEL,
+                contents=prompt,
+            )
         )
 
-        for response in responses:
+        for response in response_stream:
 
             text = getattr(
                 response,
                 "text",
-                None
+                None,
             )
 
             if text:
@@ -318,37 +191,29 @@ def _stream_gemini(
     except Exception as exc:
 
         raise RuntimeError(
-            f"Cloud AI request failed: {exc}"
+            f"Gemini request failed: {exc}"
         ) from exc
 
 
-# ============================================================
-# MAIN FUNCTION
-# ============================================================
-
 def stream_explanation(
     file_tree: List[str],
-    code_files: Dict[str, str]
+    code_files: Dict[str, str],
 ) -> Iterator[str]:
+
+    api_key = get_gemini_key()
+
+    if not api_key:
+        raise RuntimeError(
+            "Gemini API key is missing. "
+            "Add GEMINI_API_KEY in Streamlit Secrets."
+        )
 
     prompt = _build_prompt(
         file_tree,
-        code_files
+        code_files,
     )
 
-    api_key = _gemini_key()
-
-    # Streamlit Cloud → Gemini
-    if api_key:
-
-        yield from _stream_gemini(
-            prompt,
-            api_key
-        )
-
-        return
-
-    # Local PC → Ollama
-    yield from _stream_ollama(
-        prompt
+    yield from _generate_with_gemini(
+        prompt,
+        api_key,
     )
