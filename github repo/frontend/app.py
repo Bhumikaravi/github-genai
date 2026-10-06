@@ -1,115 +1,329 @@
 from __future__ import annotations
 
+import html
 import os
-import re
 import sys
 
 import streamlit as st
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    )
+)
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# Make Streamlit Cloud secrets available to the shared LLM service.
-try:
-    if "GEMINI_API_KEY" in st.secrets and not os.getenv("GEMINI_API_KEY"):
-        os.environ["GEMINI_API_KEY"] = str(st.secrets["GEMINI_API_KEY"])
-except Exception:
-    pass
 
-from backend.services.llm_service import check_model, stream_explanation, using_cloud_ai
-from backend.services.repo_processor import clone_repository, cleanup_repository, extract_code, get_file_tree
+from backend.services.repo_processor import (
+    cleanup_repository,
+    clone_repository,
+    extract_code,
+    get_file_tree,
+    validate_github_url,
+)
 
-st.set_page_config(page_title="GitHub Code Explainer", page_icon="💻", layout="centered")
+from backend.services.llm_service import (
+    check_model,
+    stream_explanation,
+)
 
-st.markdown("""
+
+st.set_page_config(
+    page_title="GitHub Code Explainer",
+    page_icon="🤖",
+    layout="wide",
+)
+
+
+st.markdown(
+    """
 <style>
-.main .block-container {max-width: 900px; padding-top: 2rem; padding-bottom: 3rem;}
-.hero {padding: 2rem; border-radius: 22px; background: linear-gradient(135deg,#111827,#334155); color: white; margin-bottom: 1.5rem;}
-.hero h1 {margin: 0 0 .6rem 0; font-size: 2.2rem;}
-.hero p {color:#e5e7eb; font-size:1.05rem;}
-.steps {display:grid; grid-template-columns:repeat(3,1fr); gap:.7rem; margin-top:1.2rem;}
-.step {background:rgba(255,255,255,.1); padding:.8rem; border-radius:12px; font-size:.9rem;}
+
+.main {
+    background-color: #f7f9fc;
+}
+
+.hero {
+    padding: 30px;
+    border-radius: 18px;
+    margin-bottom: 25px;
+    background: linear-gradient(
+        135deg,
+        #667eea,
+        #764ba2
+    );
+    color: white;
+}
+
+.hero h1 {
+    font-size: 42px;
+    margin-bottom: 8px;
+}
+
+.hero p {
+    font-size: 18px;
+}
+
+.card {
+    padding: 22px;
+    border-radius: 15px;
+    background-color: white;
+    border: 1px solid #e5e7eb;
+    margin-bottom: 20px;
+}
+
+.small-text {
+    color: #6b7280;
+}
+
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-provider_text = "cloud AI" if using_cloud_ai() else "local Ollama AI"
-st.markdown(f"""
+
+st.markdown(
+    """
 <div class="hero">
-<h1>💻 GitHub Code Explainer</h1>
-<p>Paste a public GitHub repository and get a simple, beginner-friendly explanation.</p>
-<div class="steps">
-<div class="step">🔗 1. Connect to GitHub</div>
-<div class="step">📂 2. Read source code</div>
-<div class="step">🧠 3. Explain with AI</div>
+
+<h1>🤖 GitHub Code Explainer</h1>
+
+<p>
+Paste a public GitHub repository URL and let AI explain
+the project, its features, technologies, files and workflow.
+</p>
+
 </div>
-</div>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-if using_cloud_ai():
-    st.success("☁️ Streamlit Cloud mode: Gemini AI is connected.")
-else:
-    st.info("💻 Local mode: Ollama is being used. For Streamlit Cloud, add GEMINI_API_KEY in Secrets.")
 
-url = st.text_input("GitHub Repository URL", placeholder="https://github.com/username/repository")
-col1, col2 = st.columns([1, 1])
-with col1:
-    explain_clicked = st.button("🚀 Explain Repository", type="primary", use_container_width=True)
-with col2:
-    if st.button("Clear", use_container_width=True):
-        st.session_state.pop("explanation", None)
-        st.session_state.pop("files", None)
-        st.rerun()
+st.markdown(
+    "### 🔗 Enter GitHub Repository"
+)
 
-if explain_clicked:
-    if not re.match(r"^https?://github\.com/[^/\s]+/[^/\s#?]+/?$", url.strip()):
-        st.error("Please enter a valid public GitHub repository URL.")
+
+repo_url = st.text_input(
+    "GitHub Repository URL",
+    placeholder="https://github.com/username/repository",
+)
+
+
+explain_button = st.button(
+    "🚀 Explain Repository",
+    type="primary",
+    use_container_width=True,
+)
+
+
+if explain_button:
+
+    if not repo_url.strip():
+
+        st.error(
+            "Please enter a GitHub repository URL."
+        )
+
         st.stop()
 
-    ok, message = check_model()
-    if not ok:
-        st.error(message)
+
+    if not validate_github_url(repo_url):
+
+        st.error(
+            "Please enter a valid GitHub repository URL."
+        )
+
         st.stop()
+
+
+    model_ready, model_message = check_model()
+
+    if not model_ready:
+
+        st.error(model_message)
+
+        st.info(
+            "Add GEMINI_API_KEY in "
+            "Streamlit Cloud → Settings → Secrets."
+        )
+
+        st.stop()
+
 
     repo_path = None
+
+
     try:
-        with st.status("Preparing repository...", expanded=True) as status:
-            st.write("🔗 Cloning GitHub repository...")
-            repo_path = clone_repository(url.strip())
-            st.write("📂 Finding relevant source-code files...")
-            files_tree = get_file_tree(repo_path)
-            code_files = extract_code(repo_path)
+
+        with st.status(
+            "Processing repository...",
+            expanded=True,
+        ) as status:
+
+            st.write(
+                "📥 Downloading GitHub repository..."
+            )
+
+            repo_path = clone_repository(
+                repo_url
+            )
+
+
+            st.write(
+                "🌳 Reading repository structure..."
+            )
+
+            file_tree = get_file_tree(
+                repo_path
+            )
+
+
+            st.write(
+                f"📁 Found {len(file_tree)} files."
+            )
+
+
+            st.write(
+                "🔍 Extracting source code..."
+            )
+
+            code_files = extract_code(
+                repo_path
+            )
+
+
             if not code_files:
-                raise RuntimeError("No supported source-code files were found in this repository.")
-            st.write(f"📄 Found {len(code_files)} relevant files.")
-            st.write(f"🧠 {provider_text.title()} is analyzing the codebase...")
-            placeholder = st.empty()
-            chunks = []
-            for chunk in stream_explanation(files_tree, code_files):
-                chunks.append(chunk)
-                placeholder.markdown("".join(chunks))
-            explanation = "".join(chunks).strip()
-            if not explanation:
-                raise RuntimeError("The AI returned an empty explanation. Please try again.")
-            status.update(label="Explanation ready!", state="complete", expanded=False)
-        st.session_state["explanation"] = explanation
-        st.session_state["files"] = files_tree
+
+                status.update(
+                    label="No source code found",
+                    state="error",
+                )
+
+                st.error(
+                    "No supported source-code files "
+                    "were found in this repository."
+                )
+
+                st.stop()
+
+
+            st.write(
+                f"🧩 Extracted {len(code_files)} source files."
+            )
+
+
+            st.write(
+                "🤖 Asking Gemini AI to explain the project..."
+            )
+
+
+            status.update(
+                label="Generating explanation...",
+                state="running",
+            )
+
+
+        st.markdown(
+            "## 📖 AI-Generated Explanation"
+        )
+
+
+        explanation_placeholder = st.empty()
+
+        full_response = ""
+
+
+        for chunk in stream_explanation(
+            file_tree,
+            code_files,
+        ):
+
+            full_response += chunk
+
+            explanation_placeholder.markdown(
+                full_response
+            )
+
+
+        if not full_response.strip():
+
+            st.error(
+                "The AI returned an empty response."
+            )
+
+        else:
+
+            st.success(
+                "Repository explanation generated successfully!"
+            )
+
+
+            st.download_button(
+                label="⬇️ Download Explanation",
+                data=full_response,
+                file_name="repository_explanation.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+
+            with st.expander(
+                "📂 Repository Files"
+            ):
+
+                for filename in file_tree:
+
+                    st.write(
+                        f"📄 {filename}"
+                    )
+
+
+            with st.expander(
+                "💻 Extracted Source Files"
+            ):
+
+                for filename, code in code_files.items():
+
+                    st.markdown(
+                        f"**{filename}**"
+                    )
+
+                    st.code(
+                        code,
+                        language="text",
+                    )
+
+
     except Exception as exc:
-        st.error(f"Could not explain this repository: {exc}")
+
+        st.error(
+            f"Could not explain this repository: {exc}"
+        )
+
     finally:
-        cleanup_repository(repo_path)
 
-if st.session_state.get("explanation"):
-    st.markdown("## 📘 Project Explanation")
-    st.markdown(st.session_state["explanation"])
-    files = st.session_state.get("files", [])
-    with st.expander(f"📁 Files analyzed ({len(files)})"):
-        st.code("\n".join(files), language="text")
-    st.download_button(
-        "⬇️ Download Explanation",
-        data=st.session_state["explanation"],
-        file_name="github_repository_explanation.md",
-        mime="text/markdown",
-    )
+        if repo_path:
 
-st.caption(f"Powered by GitPython + FastAPI + Streamlit + {provider_text}")
+            cleanup_repository(
+                repo_path
+            )
+
+
+st.markdown(
+    """
+---
+
+<div style="text-align:center">
+
+<p class="small-text">
+Built with Python, Streamlit and Generative AI.
+</p>
+
+</div>
+""",
+    unsafe_allow_html=True,
+)
