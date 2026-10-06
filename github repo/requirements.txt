@@ -4,5 +4,4 @@ uvicorn
 GitPython
 requests
 pydantic
-google-genai
 GitPython
