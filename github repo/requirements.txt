@@ -1,7 +1,6 @@
 streamlit
 fastapi
 uvicorn
-GitPython
 requests
 pydantic
-
+google-genai
